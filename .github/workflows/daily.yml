@@ -36,11 +36,12 @@ jobs:
             fi
           fi
 
-      - name: Random delay (randomize time of day)
-        if: steps.roll.outputs.should_run == 'true'
+      - name: Random delay (randomize time of day, scheduled runs only)
+        if: steps.roll.outputs.should_run == 'true' && github.event_name != 'workflow_dispatch'
         run: |
           # Sleep 0-240 minutes (up to 4 hours) so the commit doesn't always
-          # land at the exact same minute.
+          # land at the exact same minute. Skipped on manual runs so testing
+          # gives you an immediate result.
           DELAY=$((RANDOM % 240))
           echo "Sleeping $DELAY minutes before running..."
           sleep "${DELAY}m"
@@ -63,5 +64,5 @@ jobs:
         if: steps.roll.outputs.should_run == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN_CUSTOM: ${{ secrets.GITHUB_TOKEN_CUSTOM }}
         run: python main.py

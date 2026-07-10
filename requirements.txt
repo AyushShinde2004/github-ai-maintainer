@@ -1,0 +1,4 @@
+requests
+GitPython
+google-genai
+python-dotenv

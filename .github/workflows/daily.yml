@@ -64,5 +64,5 @@ jobs:
         if: steps.roll.outputs.should_run == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN_CUSTOM: ${{ secrets.GITHUB_TOKEN_CUSTOM }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: python main.py

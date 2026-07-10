@@ -1,0 +1,67 @@
+name: Randomized AI Maintainer
+
+on:
+  schedule:
+    # Cron can't be truly random, so this fires every day at a fixed UTC time,
+    # and the "roll-dice" step below decides whether that particular day
+    # actually does anything.
+    - cron: "30 14 * * *"   # ~8:00 PM IST baseline check-in time
+  workflow_dispatch: {}      # lets you manually force a run from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  maintainer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Roll dice (skip ~1-2 days a week)
+        id: roll
+        run: |
+          # Target ~1.5 SKIPPED days out of 7 -> ~79% chance to run, ~21% to skip.
+          # Manual runs (workflow_dispatch) always go through, so you can test on demand.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual trigger — running for sure."
+          else
+            ROLL=$((RANDOM % 100))
+            echo "Rolled: $ROLL"
+            if [ "$ROLL" -lt 79 ]; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              echo "Roll succeeded — running today."
+            else
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "Roll failed — skipping today (rest day)."
+            fi
+          fi
+
+      - name: Random delay (randomize time of day)
+        if: steps.roll.outputs.should_run == 'true'
+        run: |
+          # Sleep 0-240 minutes (up to 4 hours) so the commit doesn't always
+          # land at the exact same minute.
+          DELAY=$((RANDOM % 240))
+          echo "Sleeping $DELAY minutes before running..."
+          sleep "${DELAY}m"
+
+      - name: Checkout automation repo
+        if: steps.roll.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.roll.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.roll.outputs.should_run == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Run AI maintainer
+        if: steps.roll.outputs.should_run == 'true'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python main.py

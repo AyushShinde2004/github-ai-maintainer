@@ -34,7 +34,12 @@ repo_name = random.choice(repos)
 
 print(f"Today's repository: {repo_name}")
 
-repo_url = f"https://github.com/{USERNAME}/{repo_name}.git"
+github_token = os.getenv("GITHUB_TOKEN")
+
+repo_url = (
+    f"https://x-access-token:{github_token}"
+    f"@github.com/{USERNAME}/{repo_name}.git"
+)
 
 local_folder = f"repos/{repo_name}"
 
@@ -108,6 +113,14 @@ if os.path.exists(readme_path):
     print("Repository changed.")
 
     message = f"docs: improve README ({datetime.now().strftime('%Y-%m-%d')})"
+
+    repo.config_writer().set_value(
+        "user", "name", "github-actions[bot]"
+    ).release()
+
+    repo.config_writer().set_value(
+        "user", "email", "41898282+github-actions[bot]@users.noreply.github.com"
+    ).release()
 
     repo.index.commit(message)
 

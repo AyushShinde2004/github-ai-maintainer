@@ -1,9 +1,11 @@
 import os
 import shutil
 import random
+import time
 from git import Repo
 from dotenv import load_dotenv
 from google import genai
+from google.genai import errors as genai_errors
 from datetime import datetime
 import sys
 
@@ -88,10 +90,46 @@ if os.path.exists(readme_path):
     {readme}
     """
 
-    response = client.models.generate_content(
-        model="gemini-flash-latest",
-        contents=prompt
-    )
+    def generate_with_retry(prompt_text, max_attempts=5):
+        """
+        Calls Gemini with exponential backoff + jitter.
+        Handles transient 503/UNAVAILABLE and 429/rate-limit errors,
+        which are Google's servers being busy, not a bug in our code.
+        """
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return client.models.generate_content(
+                    model="gemini-flash-latest",
+                    contents=prompt_text
+                )
+            except genai_errors.ServerError as e:
+                # 503 UNAVAILABLE, 500, etc. — worth retrying.
+                if attempt == max_attempts:
+                    raise
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Gemini server error (attempt {attempt}/{max_attempts}): {e}")
+                print(f"Retrying in {wait:.1f}s...")
+                time.sleep(wait)
+            except genai_errors.ClientError as e:
+                # 429 rate limit is retryable; other 4xx errors (bad key,
+                # bad request) are not — no point retrying those.
+                if "429" in str(e) and attempt < max_attempts:
+                    wait = (2 ** attempt) + random.uniform(0, 1)
+                    print(f"Rate limited (attempt {attempt}/{max_attempts}). Retrying in {wait:.1f}s...")
+                    time.sleep(wait)
+                else:
+                    raise
+        return None
+
+    try:
+        response = generate_with_retry(prompt)
+    except (genai_errors.ServerError, genai_errors.ClientError) as e:
+        # Gemini is still down after all retries. This is not our bug —
+        # exit quietly (code 0) so the Action doesn't show as a failed run
+        # every time Google has a rough day. Tomorrow's scheduled run
+        # will just try again.
+        print(f"Gemini unavailable after retries, skipping this run: {e}")
+        sys.exit(0)
 
     new_readme = response.text
 

@@ -88,8 +88,8 @@ README:
 {readme}
 """
 
-    PRIMARY_MODEL = "gemini-2.5-flash-lite"
-    FALLBACK_MODEL = "gemini-3.5-flash"
+    PRIMARY_MODEL = "gemini-3.5-flash"
+    FALLBACK_MODEL = "gemini-3.1-flash-lite"
 
     def is_retryable(exc):
         """Returns True if the exception is a temporary server/load issue."""

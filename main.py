@@ -1,5 +1,4 @@
 import os
-import shutil
 import random
 import time
 from git import Repo
@@ -46,7 +45,7 @@ repo_url = (
 local_folder = f"repos/{repo_name}"
 
 # ----------------------------
-# Delete old repo if exists
+# Clone or update repository
 # ----------------------------
 if not os.path.exists(local_folder):
     print("Cloning repository...")
@@ -59,7 +58,7 @@ else:
     repo.remotes.origin.pull()
 
 # ----------------------------
-# Read README
+# README
 # ----------------------------
 readme_path = os.path.join(local_folder, "README.md")
 
@@ -68,74 +67,113 @@ if os.path.exists(readme_path):
     with open(readme_path, "r", encoding="utf-8") as f:
         readme = f.read()
 
-    print("\n========== README ==========\n")
     print("README loaded successfully.")
 
     prompt = f"""
-    You are an expert GitHub maintainer.
+You are an expert GitHub maintainer.
 
-    Your task is to make ONE tiny improvement to this README.
+Your task is to make ONE tiny improvement to this README.
 
-    Rules:
+Rules:
 
-    - Maximum 5 changed lines.
-    - Never invent new features.
-    - Never remove existing information.
-    - Improve only grammar, wording, formatting or clarity.
-    - Preserve Markdown.
-    - Return ONLY the complete updated README.
+- Maximum 5 changed lines.
+- Never invent new features.
+- Never remove existing information.
+- Improve only grammar, wording, formatting or clarity.
+- Preserve Markdown.
+- Return ONLY the complete updated README.
 
-    README:
+README:
 
-    {readme}
-    """
+{readme}
+"""
 
-    def generate_with_retry(prompt_text, max_attempts=5):
-        """
-        Calls Gemini with exponential backoff + jitter.
-        Handles transient 503/UNAVAILABLE and 429/rate-limit errors,
-        which are Google's servers being busy, not a bug in our code.
-        """
-        for attempt in range(1, max_attempts + 1):
+    PRIMARY_MODEL = "gemini-2.5-flash"
+    FALLBACK_MODEL = "gemini-2.5-flash-lite"
+
+    def is_retryable(exc):
+        """Returns True if the exception is a temporary server/load issue."""
+        if isinstance(exc, genai_errors.ServerError):
+            return True
+
+        if isinstance(exc, genai_errors.ClientError):
+            msg = str(exc)
+            return "429" in msg
+
+        return False
+
+    def try_model(model_name, prompt_text):
+        print(f"Trying {model_name}...")
+
+        return client.models.generate_content(
+            model=model_name,
+            contents=prompt_text
+        )
+
+    def generate_with_retry(prompt_text, retries=4):
+
+        # ----------------------------
+        # First attempt:
+        # Flash -> Flash Lite
+        # ----------------------------
+        for model in (PRIMARY_MODEL, FALLBACK_MODEL):
             try:
-                return client.models.generate_content(
-                    model="gemini-flash-latest",
-                    contents=prompt_text
-                )
-            except genai_errors.ServerError as e:
-                # 503 UNAVAILABLE, 500, etc. — worth retrying.
-                if attempt == max_attempts:
-                    raise
-                wait = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Gemini server error (attempt {attempt}/{max_attempts}): {e}")
-                print(f"Retrying in {wait:.1f}s...")
-                time.sleep(wait)
-            except genai_errors.ClientError as e:
-                # 429 rate limit is retryable; other 4xx errors (bad key,
-                # bad request) are not — no point retrying those.
-                if "429" in str(e) and attempt < max_attempts:
-                    wait = (2 ** attempt) + random.uniform(0, 1)
-                    print(f"Rate limited (attempt {attempt}/{max_attempts}). Retrying in {wait:.1f}s...")
-                    time.sleep(wait)
+                response = try_model(model, prompt_text)
+                print(f"Success with {model}")
+                return response
+
+            except Exception as e:
+                if is_retryable(e):
+                    print(f"{model} temporarily unavailable.")
                 else:
                     raise
-        return None
+
+        # ----------------------------
+        # Retry loop with exponential backoff
+        # ----------------------------
+        for attempt in range(1, retries + 1):
+
+            wait = (2 ** attempt) + random.uniform(0, 1)
+
+            print(
+                f"\nRetry round {attempt}/{retries} "
+                f"(waiting {wait:.1f}s)..."
+            )
+
+            time.sleep(wait)
+
+            for model in (PRIMARY_MODEL, FALLBACK_MODEL):
+
+                try:
+                    response = try_model(model, prompt_text)
+                    print(f"Recovered using {model}")
+                    return response
+
+                except Exception as e:
+
+                    if is_retryable(e):
+                        print(f"{model} still unavailable.")
+                        continue
+
+                    raise
+
+        raise RuntimeError(
+            "All Gemini models were unavailable after retries."
+        )
 
     try:
         response = generate_with_retry(prompt)
-    except (genai_errors.ServerError, genai_errors.ClientError) as e:
-        # Gemini is still down after all retries. This is not our bug —
-        # exit quietly (code 0) so the Action doesn't show as a failed run
-        # every time Google has a rough day. Tomorrow's scheduled run
-        # will just try again.
-        print(f"Gemini unavailable after retries, skipping this run: {e}")
+
+    except Exception as e:
+        print(f"\nSkipping today's run.")
+        print(e)
         sys.exit(0)
 
     new_readme = response.text
 
     if new_readme.strip() == readme.strip():
         print("No changes suggested.")
-        sys.exit()
+        sys.exit(0)
 
     with open(readme_path, "w", encoding="utf-8") as f:
         f.write(new_readme)
@@ -146,7 +184,7 @@ if os.path.exists(readme_path):
 
     if not repo.is_dirty():
         print("Repository has no changes.")
-        sys.exit()
+        sys.exit(0)
 
     print("Repository changed.")
 
@@ -157,7 +195,9 @@ if os.path.exists(readme_path):
     ).release()
 
     repo.config_writer().set_value(
-        "user", "email", "41898282+github-actions[bot]@users.noreply.github.com"
+        "user",
+        "email",
+        "41898282+github-actions[bot]@users.noreply.github.com"
     ).release()
 
     repo.index.commit(message)
@@ -167,6 +207,7 @@ if os.path.exists(readme_path):
     print("Pushing changes...")
     origin = repo.remote(name="origin")
     origin.push()
+
     print("Done!")
 
 else:
